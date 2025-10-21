@@ -314,7 +314,6 @@ def run_with_limits(executable_path, input_data, time_limit, memory_limit_kb):
                 if mem > peak_kb:
                     peak_kb = mem
                 if memory_limit_kb and mem > memory_limit_kb:
-                    # kill whole tree
                     try:
                         for child in p.children(recursive=True):
                             try:
@@ -328,7 +327,6 @@ def run_with_limits(executable_path, input_data, time_limit, memory_limit_kb):
                     break
                 time.sleep(0.05)
         except Exception:
-            # monitor should be best-effort; never raise to main thread
             pass
 
     mon_thread = threading.Thread(target=monitor, daemon=True)
@@ -337,18 +335,14 @@ def run_with_limits(executable_path, input_data, time_limit, memory_limit_kb):
     try:
         stdout, stderr = proc.communicate(input=input_data, timeout=time_limit)
         elapsed = round(time.time() - start, 3)
-        # Build CompletedProcess-like object for compatibility
         cp = subprocess.CompletedProcess([executable_path], proc.returncode, stdout, stderr)
         return cp, peak_kb, elapsed, killed_for_mem, False
     except subprocess.TimeoutExpired:
         timeout_flag = True
-        # kill process tree
         try:
             if os.name == "posix":
-                # kill process group
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             else:
-                # Windows: use psutil to kill tree
                 parent = psutil.Process(proc.pid)
                 for child in parent.children(recursive=True):
                     try:
@@ -365,17 +359,12 @@ def run_with_limits(executable_path, input_data, time_limit, memory_limit_kb):
         fake = subprocess.CompletedProcess([executable_path], 1, stdout="", stderr="Time Limit Exceeded")
         return fake, peak_kb, elapsed, killed_for_mem, True
     except Exception as e:
-        # generic error
         elapsed = round(time.time() - start, 3)
         fake = subprocess.CompletedProcess([executable_path], 1, stdout="", stderr=str(e))
         return fake, peak_kb, elapsed, killed_for_mem, False
 
-# -------------------------
-# Stronger / safer submit route
-# -------------------------
 @app.route('/submit', methods=['POST'])
 def submit():
-    # Try to acquire a slot for concurrent submissions
     if not submission_semaphore.acquire(blocking=False):
         return jsonify({"status": "Error", "error": "Server busy - too many concurrent submissions. Try again shortly."}), 429
 
@@ -389,7 +378,6 @@ def submit():
         elif not code:
             return jsonify({"status": "Error", "error": "No code provided"})
 
-        # Parse limits (strict)
         try:
             time_limit = float(request.form.get('time_limit', 1) or 1)
             if math.isnan(time_limit) or time_limit <= 0:
@@ -398,7 +386,7 @@ def submit():
             time_limit = 1.0
 
         try:
-            memory_limit = int(request.form.get('memory_limit', 256) or 256)  # in MB
+            memory_limit = int(request.form.get('memory_limit', 256) or 256) 
             if memory_limit <= 0:
                 memory_limit = 256
         except Exception:
@@ -412,16 +400,13 @@ def submit():
 
         problem = problems[problem_id]
 
-        # Get the problem-specific limits
-        time_limit = problem.get("time_limit", 1.0)         # default 1s if not specified
-        memory_limit = problem.get("memory_limit", 256)     # default 256 MB
+        time_limit = problem.get("time_limit", 1.0)    
+        memory_limit = problem.get("memory_limit", 256)    
         memory_limit_kb = memory_limit * 1024
 
-        # Get the test cases
         test_cases = problem.get('test_cases', [])
 
 
-        # Create isolated temp dir for this submission
         tmp_dir = tempfile.mkdtemp(prefix="submission_")
         uid = uuid.uuid4().hex
         cpp_path = os.path.join(tmp_dir, f"solution_{uid}.cpp")
@@ -431,29 +416,24 @@ def submit():
         with open(cpp_path, 'w', encoding='utf-8') as f:
             f.write(code)
 
-        # Compile inside temp dir
         start_compile = time.time()
         compile_cmd = ["g++", "-std=c++17", "-O2", cpp_path, "-o", exe_path]
         compile_result = subprocess.run(compile_cmd, capture_output=True, text=True)
         compile_time_sec = round(time.time() - start_compile, 3)
 
         if compile_result.returncode != 0:
-            # Clean up compile artifacts (we will in finally too)
             return jsonify({
                 "status": "Compilation Error",
                 "compile_log": compile_result.stderr,
                 "compile_time_sec": compile_time_sec
             })
 
-        # Run tests (each test uses its own process and monitor)
         test_results = []
         for idx, case in enumerate(test_cases):
-            # Run the program with per-test memory/time limits
             run_result, memory_used_kb, elapsed_time, killed_for_mem, timed_out = run_with_limits(
                 exe_path, case['input'], time_limit, memory_limit_kb
             )
 
-            # Strict (byte-for-byte) comparison
             if timed_out:
                 status = "Time Limit Exceeded"
                 passed = False
@@ -461,7 +441,6 @@ def submit():
                 status = "Memory Limit Exceeded"
                 passed = False
             elif run_result.returncode != 0:
-                # Return code nonzero: runtime error. Provide stderr for debugging.
                 status = "Runtime Error"
                 passed = False
             else:
@@ -470,7 +449,6 @@ def submit():
                 passed = (output == expected)
                 status = "Passed" if passed else "Wrong Answer"
 
-            # Optionally include stderr for runtime error debugging (but be careful exposing it publicly)
             test_results.append({
                 "test_num": idx + 1,
                 "status": status,
@@ -498,17 +476,13 @@ def submit():
         return jsonify({"status": "Error", "error": str(e)}), 500
 
     finally:
-        # Cleanup temporary directory and release slot
         try:
             if tmp_dir and os.path.exists(tmp_dir):
                 shutil.rmtree(tmp_dir)
         except Exception:
             pass
         submission_semaphore.release()
-    
-# -------------------------
-# Routes
-# -------------------------
+ 
 @app.route('/')
 def home():
     return render_template('home.html', problems=problems)
@@ -523,3 +497,4 @@ def problem(pid):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
