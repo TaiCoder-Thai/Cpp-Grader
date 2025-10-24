@@ -104,6 +104,13 @@ h2 {
   color: #ff8a80;
 }
 
+.difficulty.impossible {
+  background-color: rgba(30, 30, 30, 0.8);
+  color: #888888; 
+  border: 1px solid rgba(255, 255, 255, 0.1); 
+}
+
+
 .card a {
   display: inline-block;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -385,4 +392,5 @@ pre {
 .score-box.full {
   background-color: #4caf50; /* green */
   color: white;
+
 }
