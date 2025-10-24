@@ -208,6 +208,7 @@ def submit():
         if problem_id == "3":
             if "#" in code:
                 return jsonify({
+                    "status": "Error",
                     "error": "❌ '#' is not allowed in code."
                 }), 400
 
@@ -324,6 +325,7 @@ def problem(pid):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 
