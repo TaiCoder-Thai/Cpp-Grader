@@ -71,21 +71,22 @@ problems = {
     "constraints": "1 ≤ N ≤ 100",
     "time_limit": 0.09,
     "memory_limit": 1,
-    "sample_input": 3,
+    "sample_input": "3",
     "sample_output": "Hello World!\nHello World!\nHello World!",
     "test_cases": [
-    {"input": "1\n", "output": "Hello World!"},
-    {"input": "2\n", "output": "Hello World!\nHello World!"},
-    {"input": "5\n", "output": "Hello World!\nHello World!\nHello World!\nHello World!\nHello World!"},
-    {"input": "10\n", "output": "Hello World!\n" * 10[:-1]},
-    {"input": "25\n", "output": "Hello World!\n" * 25[:-1]},
-    {"input": "50\n", "output": "Hello World!\n" * 50[:-1]},
-    {"input": "75\n", "output": "Hello World!\n" * 75[:-1]},
-    {"input": "90\n", "output": "Hello World!\n" * 90[:-1]}, 
-    {"input": "99\n", "output": "Hello World!\n" * 99[:-1]},
-    {"input": "100\n", "output": "Hello World!\n" * 100[:-1]}
-]
-    },     
+        {"input": "1\n", "output": "Hello World!"},
+        {"input": "2\n", "output": "\n".join(["Hello World!"]*2)},
+        {"input": "5\n", "output": "\n".join(["Hello World!"]*5)},
+        {"input": "10\n", "output": "\n".join(["Hello World!"]*10)},
+        {"input": "25\n", "output": "\n".join(["Hello World!"]*25)},
+        {"input": "50\n", "output": "\n".join(["Hello World!"]*50)},
+        {"input": "75\n", "output": "\n".join(["Hello World!"]*75)},
+        {"input": "90\n", "output": "\n".join(["Hello World!"]*90)},
+        {"input": "99\n", "output": "\n".join(["Hello World!"]*99)},
+        {"input": "100\n", "output": "\n".join(["Hello World!"]*100)}
+    ]
+}
+
 }
 
 
@@ -323,6 +324,7 @@ def problem(pid):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 
