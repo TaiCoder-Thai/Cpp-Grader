@@ -196,12 +196,6 @@ def submit():
         code = request.form.get('code')
         uploaded_file = request.files.get('codefile')
 
-        if problem_id == "3":
-            if "#" in code:
-                return jsonify({
-                    "error": "❌ '#' is not allowed in code."
-                }), 400
-
         if uploaded_file and uploaded_file.filename:
             code = uploaded_file.read().decode('utf-8')
         elif not code:
@@ -210,6 +204,12 @@ def submit():
         problem_id = request.form.get('problem_id', '1')
         if problem_id not in problems:
             return jsonify({"status": "Error", "error": "Invalid problem ID"})
+
+        if problem_id == "3":
+            if "#" in code:
+                return jsonify({
+                    "error": "❌ '#' is not allowed in code."
+                }), 400
 
         problem = problems[problem_id]
 
@@ -324,6 +324,7 @@ def problem(pid):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 
