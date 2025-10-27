@@ -90,7 +90,7 @@ problems = {
 }
 
 
-MAX_CONCURRENT_SUBMISSIONS = 3
+MAX_CONCURRENT_SUBMISSIONS = 5
 submission_semaphore = BoundedSemaphore(MAX_CONCURRENT_SUBMISSIONS)
 
 def run_with_limits(executable_path, input_data, time_limit, memory_limit_kb):
@@ -325,6 +325,7 @@ def problem(pid):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 
