@@ -93,7 +93,7 @@ problems = {
     "input_format": "First line: N (number of queries)\nNext N lines: one integer M each",
     "output_format": "N lines - Each line containing the M-th prime modulo 10^9+7",
     "constraints": "1 ≤ N ≤ 1000000\n1 ≤ M ≤ 10000000",
-    "time_limit": 15.0,
+    "time_limit": 3.0,
     "memory_limit": 50,
     "sample_input": "5\n1\n2\n3\n4\n5",
     "sample_output": "2\n3\n5\n7\n11",
@@ -349,6 +349,7 @@ def problem(pid):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 
