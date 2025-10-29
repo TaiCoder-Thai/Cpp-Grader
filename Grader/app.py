@@ -85,12 +85,36 @@ problems = {
         {"input": "99\n", "output": "\n".join(["Hello World!"]*99)},
         {"input": "100\n", "output": "\n".join(["Hello World!"]*100)}
     ]
+},
+    "4": {
+    "title": "4. N-th Prime",
+    "description": "Given N queries, each with an integer M, output the M-th prime modulo 10^9+7.",
+    "difficulty": "hard",
+    "input_format": "First line: N (number of queries)\nNext N lines: one integer M each",
+    "output_format": "N lines - Each line containing the M-th prime modulo 10^9+7",
+    "constraints": "1 ≤ N ≤ 1000000\n1 ≤ M ≤ 10000000",
+    "time_limit": 0.3,
+    "memory_limit": 50,
+    "sample_input": "5\n1\n2\n3\n4\n5",
+    "sample_output": "2\n3\n5\n7\n11",
+    "test_cases": [
+    {"input": "5\n1000000\n5000000\n9000000\n10000000\n9999999\n","output": "15485863\n86028121\n154813451\n179424673\n179426549"},
+    {"input": "10\n9999000\n9998000\n9997000\n9996000\n9995000\n9994000\n9993000\n9992000\n9991000\n9990000\n","output": "179302771\n179282543\n179262037\n179241539\n179221213\n179200681\n179180243\n179159717\n179139293\n179118787"},
+    {"input": "100\n10000000\n"*100,"output": ("179424673\n"*100).rstrip()},
+    {"input": "1000\n10000000\n"*1000,"output": ("179424673\n"*1000).rstrip()},
+    {"input": "1000000\n10000000\n"*1000000,"output": ("179424673\n"*1000000).rstrip()},
+    {"input": "5\n10000000\n9999999\n9999998\n9999997\n9999996\n","output": "179424673\n179426549\n179426519\n179426497\n179426479"},
+    {"input": "3\n10000000\n10000000\n10000000\n","output": "179424673\n179424673\n179424673"},
+    {"input": "2\n9999999\n10000000\n","output": "179426549\n179424673"},
+    {"input": "4\n9999990\n9999991\n9999992\n9999993\n","output": "179425391\n179425403\n179425429\n179425451"},
+    {"input": "6\n9999980\n9999981\n9999982\n9999983\n9999984\n9999985\n","output": "179424919\n179424929\n179424943\n179424967\n179424973\n179424989"}
+    ]
 }
 
 }
 
 
-MAX_CONCURRENT_SUBMISSIONS = 5
+MAX_CONCURRENT_SUBMISSIONS = 3
 submission_semaphore = BoundedSemaphore(MAX_CONCURRENT_SUBMISSIONS)
 
 def run_with_limits(executable_path, input_data, time_limit, memory_limit_kb):
@@ -325,6 +349,7 @@ def problem(pid):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 
