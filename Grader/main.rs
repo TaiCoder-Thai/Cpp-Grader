@@ -1,13 +1,12 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::Serialize;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
-use sysinfo::{Pid, ProcessExt, System, SystemExt};
+use sysinfo::{ProcessExt, System, SystemExt, Pid};
 use wait_timeout::ChildExt;
 
 #[derive(Serialize)]
@@ -39,8 +38,8 @@ struct Problem {
 }
 
 lazy_static::lazy_static! {
-    static ref PROBLEMS: HashMap<&'static str, Problem> = {
-        let mut m = HashMap::new();
+    static ref PROBLEMS: std::collections::HashMap<&'static str, Problem> = {
+        let mut m = std::collections::HashMap::new();
         m.insert("1", Problem {
             title: "1. A + B",
             description: "Sum two numbers",
@@ -60,11 +59,7 @@ const MAX_CONCURRENT_SUBMISSIONS: usize = 3;
 static SUBMISSION_SEMAPHORE: once_cell::sync::Lazy<Arc<Mutex<usize>>> =
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(MAX_CONCURRENT_SUBMISSIONS)));
 
-fn normalize_whitespace(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-async fn submit(form: web::Form<HashMap<String, String>>) -> impl Responder {
+async fn submit(form: web::Form<std::collections::HashMap<String, String>>) -> impl Responder {
     let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
     if *sem == 0 {
         return HttpResponse::TooManyRequests().json("Server busy, try later");
@@ -72,21 +67,11 @@ async fn submit(form: web::Form<HashMap<String, String>>) -> impl Responder {
     *sem -= 1;
     drop(sem);
 
-    let tmp_dir = match tempdir() {
-        Ok(t) => t,
-        Err(e) => {
-            let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
-            *sem += 1;
-            return HttpResponse::InternalServerError().json(format!("tempdir error: {}", e));
-        }
-    };
-
+    let tmp_dir = tempdir().unwrap();
     let code = form.get("code").cloned().unwrap_or_default();
-    let problem_id = form.get("problem_id").cloned().unwrap_or_else(|| "1".to_string());
+    let problem_id = form.get("problem_id").cloned().unwrap_or("1".to_string());
 
     if !PROBLEMS.contains_key(problem_id.as_str()) {
-        let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
-        *sem += 1;
         return HttpResponse::BadRequest().json("Invalid problem ID");
     }
 
@@ -94,38 +79,24 @@ async fn submit(form: web::Form<HashMap<String, String>>) -> impl Responder {
     let code_path = tmp_dir.path().join("solution.cpp");
     let exe_path = tmp_dir.path().join("solution_exe");
 
-    if let Err(e) = (|| -> Result<(), std::io::Error> {
-        let mut f = File::create(&code_path)?;
-        f.write_all(code.as_bytes())?;
-        Ok(())
-    })() {
-        let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
-        *sem += 1;
-        return HttpResponse::InternalServerError().json(format!("write code error: {}", e));
+    {
+        let mut f = File::create(&code_path).unwrap();
+        f.write_all(code.as_bytes()).unwrap();
     }
 
     let start_compile = Instant::now();
-    let compile_output = match Command::new("g++")
+    let compile_output = Command::new("g++")
         .arg("-std=c++17")
         .arg("-O2")
         .arg(&code_path)
         .arg("-o")
         .arg(&exe_path)
         .output()
-    {
-        Ok(o) => o,
-        Err(e) => {
-            let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
-            *sem += 1;
-            return HttpResponse::InternalServerError().json(format!("compile spawn error: {}", e));
-        }
-    };
+        .expect("Failed to compile");
     let compile_time = start_compile.elapsed().as_secs_f64();
 
     if !compile_output.status.success() {
         let compile_log = String::from_utf8_lossy(&compile_output.stderr).to_string();
-        let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
-        *sem += 1;
         return HttpResponse::Ok().json(SubmissionResponse {
             status: "Compilation Error".into(),
             score: 0,
@@ -136,74 +107,42 @@ async fn submit(form: web::Form<HashMap<String, String>>) -> impl Responder {
     }
 
     let mut test_results = Vec::new();
-    let mut passed_count = 0usize;
+    let mut passed_count = 0;
 
     for (i, (input, expected)) in problem.test_cases.iter().enumerate() {
         let start_time = Instant::now();
-        let mut child = match Command::new(&exe_path)
+        let mut child = Command::new(&exe_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
-                *sem += 1;
-                return HttpResponse::InternalServerError().json(format!("spawn error: {}", e));
-            }
-        };
+            .expect("Failed to run executable");
+
+        let pid = Pid::from(child.id() as usize);
 
         if let Some(mut stdin) = child.stdin.take() {
-            if let Err(e) = stdin.write_all(input.as_bytes()) {
-                let _ = child.kill();
-                let _ = child.wait();
-                let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
-                *sem += 1;
-                return HttpResponse::InternalServerError().json(format!("write input error: {}", e));
-            }
+            stdin.write_all(input.as_bytes()).unwrap();
         }
 
         let timeout = Duration::from_secs_f64(problem.time_limit);
-        let timed_out = match child.wait_timeout(timeout) {
-            Ok(Some(status)) => {
-                !status.success()
-            }
-            Ok(None) => {
+        let timed_out = match child.wait_timeout(timeout).unwrap() {
+            Some(status) => !status.success(),
+            None => {
                 let _ = child.kill();
-                let _ = child.wait();
                 true
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
-                *sem += 1;
-                return HttpResponse::InternalServerError().json(format!("wait_timeout error: {}", e));
             }
         };
 
         let elapsed = start_time.elapsed().as_secs_f64();
-        let output = match child.wait_with_output() {
-            Ok(o) => o,
-            Err(e) => {
-                let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
-                *sem += 1;
-                return HttpResponse::InternalServerError().json(format!("wait_with_output error: {}", e));
-            }
-        };
-
+        let output = child.wait_with_output().unwrap();
         let stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
 
         let mut sys = System::new_all();
         sys.refresh_processes();
-        let memory_used_kb = sys
-            .process(Pid::from(child.id() as usize))
-            .map(|p| p.memory())
-            .unwrap_or(0);
+        let memory_used_kb = sys.process(pid).map(|p| p.memory()).unwrap_or(0);
 
-        let passed = normalize_whitespace(&stdout_str) == normalize_whitespace(expected) && !timed_out;
+        let passed = stdout_str.trim() == expected.trim() && !timed_out;
         if passed {
             passed_count += 1;
         }
@@ -254,7 +193,7 @@ async fn main() -> std::io::Result<()> {
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "5000".to_string())
         .parse()
-        .unwrap_or(5000);
+        .unwrap();
 
     HttpServer::new(|| App::new().route("/submit", web::post().to(submit)))
         .bind(("0.0.0.0", port))?
