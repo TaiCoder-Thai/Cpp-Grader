@@ -190,8 +190,13 @@ async fn submit(form: web::Form<std::collections::HashMap<String, String>>) -> i
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    let port: u16 = std::env::var("PORT")
+        .unwrap_or_else(|_| "5000".to_string())
+        .parse()
+        .unwrap();
+
     HttpServer::new(|| App::new().route("/submit", web::post().to(submit)))
-        .bind(("0.0.0.0", 5000))?
+        .bind(("0.0.0.0", port))?
         .run()
         .await
 }
