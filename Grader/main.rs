@@ -48,6 +48,7 @@ lazy_static::lazy_static! {
             test_cases: vec![
                 ("3 5\n", "8"),
                 ("10 20\n", "30"),
+                ("28282929 2828282\n", "31111211"),
             ],
         });
         m
@@ -138,7 +139,7 @@ async fn submit(form: web::Form<std::collections::HashMap<String, String>>) -> i
         let mut sys = System::new_all();
         sys.refresh_processes();
         let memory_used_kb = sys
-            .process(Pid::from(child.id()))
+            .process(Pid::from(child.id() as usize))
             .map(|p| p.memory())
             .unwrap_or(0);
 
@@ -200,3 +201,4 @@ async fn main() -> std::io::Result<()> {
         .run()
         .await
 }
+
