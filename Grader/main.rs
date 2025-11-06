@@ -158,7 +158,7 @@ async fn submit(form: web::Form<std::collections::HashMap<String, String>>) -> i
             },
             passed,
             time_sec: elapsed,
-            memory_kb,
+            memory_kb: memory_used_kb,
             stdout_snippet: stdout_str.chars().take(200).collect(),
             stderr_snippet: stderr_str.chars().take(200).collect(),
         });
@@ -200,3 +200,4 @@ async fn main() -> std::io::Result<()> {
         .run()
         .await
 }
+
