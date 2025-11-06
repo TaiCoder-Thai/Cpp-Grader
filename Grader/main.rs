@@ -1,3 +1,4 @@
+use actix_files as fs;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::Serialize;
 use std::fs::File;
@@ -8,6 +9,7 @@ use std::time::{Duration, Instant};
 use tempfile::tempdir;
 use sysinfo::{ProcessExt, System, SystemExt, Pid};
 use wait_timeout::ChildExt;
+use tera::{Tera, Context};
 
 #[derive(Serialize)]
 struct TestResult {
@@ -45,11 +47,7 @@ lazy_static::lazy_static! {
             description: "Sum two numbers",
             time_limit: 0.67,
             memory_limit_kb: 10 * 1024,
-            test_cases: vec![
-                ("3 5\n", "8"),
-                ("10 20\n", "30"),
-                ("28282929 2828282\n", "31111211"),
-            ],
+            test_cases: vec![("3 5\n", "8"), ("10 20\n", "30"), ("28282929 2828282\n", "31111211")],
         });
         m
     };
@@ -58,6 +56,27 @@ lazy_static::lazy_static! {
 const MAX_CONCURRENT_SUBMISSIONS: usize = 3;
 static SUBMISSION_SEMAPHORE: once_cell::sync::Lazy<Arc<Mutex<usize>>> =
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(MAX_CONCURRENT_SUBMISSIONS)));
+
+async fn home(tera: web::Data<Tera>) -> impl Responder {
+    let rendered = tera.render("home.html", &Context::new()).unwrap_or_else(|_| "Error rendering".into());
+    HttpResponse::Ok().content_type("text/html").body(rendered)
+}
+
+async fn problem_page(tera: web::Data<Tera>, path: web::Path<String>) -> impl Responder {
+    let problem_id = path.into_inner();
+    if let Some(problem) = PROBLEMS.get(problem_id.as_str()) {
+        let mut context = Context::new();
+        context.insert("id", &problem_id);
+        context.insert("title", &problem.title);
+        context.insert("description", &problem.description);
+        context.insert("time_limit", &problem.time_limit);
+        let rendered = tera.render("problem.html", &context)
+            .unwrap_or_else(|_| "Error rendering problem".into());
+        HttpResponse::Ok().content_type("text/html").body(rendered)
+    } else {
+        HttpResponse::NotFound().body("Problem not found")
+    }
+}
 
 async fn submit(form: web::Form<std::collections::HashMap<String, String>>) -> impl Responder {
     let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
@@ -118,8 +137,6 @@ async fn submit(form: web::Form<std::collections::HashMap<String, String>>) -> i
             .spawn()
             .expect("Failed to run executable");
 
-        let pid = Pid::from(child.id() as usize);
-
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(input.as_bytes()).unwrap();
         }
@@ -140,22 +157,19 @@ async fn submit(form: web::Form<std::collections::HashMap<String, String>>) -> i
 
         let mut sys = System::new_all();
         sys.refresh_processes();
-        let memory_used_kb = sys.process(pid).map(|p| p.memory()).unwrap_or(0);
+        let memory_used_kb = sys
+            .process(Pid::from(child.id() as usize))
+            .map(|p| p.memory())
+            .unwrap_or(0);
 
         let passed = stdout_str.trim() == expected.trim() && !timed_out;
-        if passed {
-            passed_count += 1;
-        }
+        if passed { passed_count += 1; }
 
         test_results.push(TestResult {
             test_num: i + 1,
-            status: if timed_out {
-                "Time Limit Exceeded".into()
-            } else if !passed {
-                "Wrong Answer".into()
-            } else {
-                "Passed".into()
-            },
+            status: if timed_out { "Time Limit Exceeded".into() } 
+                    else if !passed { "Wrong Answer".into() } 
+                    else { "Passed".into() },
             passed,
             time_sec: elapsed,
             memory_kb: memory_used_kb,
@@ -165,11 +179,7 @@ async fn submit(form: web::Form<std::collections::HashMap<String, String>>) -> i
     }
 
     let total_tests = test_results.len();
-    let score = if total_tests > 0 {
-        (100 * passed_count / total_tests) as u32
-    } else {
-        0
-    };
+    let score = if total_tests > 0 { (100 * passed_count / total_tests) as u32 } else { 0 };
     let verdict = if passed_count == total_tests && total_tests > 0 {
         "✅ Accepted".into()
     } else {
@@ -190,13 +200,20 @@ async fn submit(form: web::Form<std::collections::HashMap<String, String>>) -> i
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let port: u16 = std::env::var("PORT")
-        .unwrap_or_else(|_| "5000".to_string())
-        .parse()
-        .unwrap();
+    let port: u16 = std::env::var("PORT").unwrap_or("5000".into()).parse().unwrap();
 
-    HttpServer::new(|| App::new().route("/submit", web::post().to(submit)))
-        .bind(("0.0.0.0", port))?
-        .run()
-        .await
+    let tera = Tera::new("templates/**/*").unwrap();
+    let tera = web::Data::new(tera);
+
+    HttpServer::new(move || {
+        App::new()
+            .app_data(tera.clone())
+            .route("/", web::get().to(home))
+            .route("/problem/{id}", web::get().to(problem_page))
+            .route("/submit", web::post().to(submit))
+            .service(fs::Files::new("/static", "./static").show_files_listing())
+    })
+    .bind(("0.0.0.0", port))?
+    .run()
+    .await
 }
