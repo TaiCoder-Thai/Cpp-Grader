@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
-use sysinfo::{ProcessExt, System, SystemExt};
+use sysinfo::{ProcessExt, System, SystemExt, Pid};
 use wait_timeout::ChildExt;
 
 #[derive(Serialize)]
@@ -138,7 +138,7 @@ async fn submit(form: web::Form<std::collections::HashMap<String, String>>) -> i
         let mut sys = System::new_all();
         sys.refresh_processes();
         let memory_used_kb = sys
-            .process(child.id() as i32)
+            .process(Pid::from(child.id()))
             .map(|p| p.memory())
             .unwrap_or(0);
 
@@ -200,4 +200,3 @@ async fn main() -> std::io::Result<()> {
         .run()
         .await
 }
-
