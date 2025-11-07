@@ -147,6 +147,7 @@ async fn submit(form: actix_multipart::Multipart) -> impl Responder {
             .spawn()
             .unwrap();
 
+        let pid = child.id();
         {
             let stdin = child.stdin.as_mut().unwrap();
             stdin.write_all(input.as_bytes()).unwrap();
@@ -155,8 +156,9 @@ async fn submit(form: actix_multipart::Multipart) -> impl Responder {
         let output = child.wait_with_output().unwrap();
         let duration = start.elapsed().as_secs_f64();
 
-        let sys = System::new_all();
-        let memory = sys.process(Pid::from(child.id() as usize))
+        let mut sys = System::new_all();
+        sys.refresh_process(Pid::from(pid as usize));
+        let memory = sys.process(Pid::from(pid as usize))
             .map(|p| p.memory())
             .unwrap_or(0);
 
