@@ -1,36 +1,17 @@
 use actix_files as fs;
+use actix_multipart::Multipart;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use futures_util::StreamExt as _;
+use once_cell::sync::Lazy;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tempfile::tempdir;
-use sysinfo::{ProcessExt, System, SystemExt, Pid};
-use wait_timeout::ChildExt;
-use tera::{Tera, Context};
+use tera::{Context, Tera};
 
-#[derive(Serialize)]
-struct TestResult {
-    test_num: usize,
-    status: String,
-    passed: bool,
-    time_sec: f64,
-    memory_kb: u64,
-    stdout_snippet: String,
-    stderr_snippet: String,
-}
-
-#[derive(Serialize)]
-struct SubmissionResponse {
-    status: String,
-    score: u32,
-    test_results: Vec<TestResult>,
-    compile_log: String,
-    compile_time_sec: f64,
-}
-
+#[derive(Serialize, Clone)]
 struct Problem {
     title: &'static str,
     description: &'static str,
@@ -39,196 +20,197 @@ struct Problem {
     test_cases: Vec<(&'static str, &'static str)>,
 }
 
-lazy_static::lazy_static! {
-    static ref PROBLEMS: std::collections::HashMap<&'static str, Problem> = {
-        let mut m = std::collections::HashMap::new();
-        m.insert("1", Problem {
-            title: "1. A + B",
-            description: "Sum two numbers",
-            time_limit: 1.0,
-            memory_limit_kb: 10 * 1024,
-            test_cases: vec![
-                ("3 5\n", "8"),
-                ("10 20\n", "30"),
-                ("28282929 2828282\n", "31111211"),
-            ],
-        });
-        m
-    };
-}
+static PROBLEMS: Lazy<HashMap<&'static str, Problem>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert("1", Problem {
+        title: "1. A + B",
+        description: "Sum two numbers",
+        time_limit: 1.0,
+        memory_limit_kb: 10 * 1024,
+        test_cases: vec![
+            ("3 5\n", "8"),
+            ("10 20\n", "30"),
+            ("28282929 2828282\n", "31111211"),
+        ],
+    });
+    m
+});
 
-const MAX_CONCURRENT_SUBMISSIONS: usize = 3;
-static SUBMISSION_SEMAPHORE: once_cell::sync::Lazy<Arc<Mutex<usize>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(MAX_CONCURRENT_SUBMISSIONS)));
+static SUBMISSION_LOCK: Lazy<Arc<Mutex<usize>>> = Lazy::new(|| Arc::new(Mutex::new(0)));
 
-async fn submit(form: web::Form<std::collections::HashMap<String, String>>) -> impl Responder {
-    let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
-    if *sem == 0 {
-        return HttpResponse::TooManyRequests().json("Server busy, try later");
-    }
-    *sem -= 1;
-    drop(sem);
+async fn home(tmpl: web::Data<Tera>) -> impl Responder {
+    let mut ctx = Context::new();
+    ctx.insert("problems", &*PROBLEMS);
 
-    let tmp_dir = tempdir().unwrap();
-    let code = form.get("code").cloned().unwrap_or_default();
-    let problem_id = form.get("problem_id").cloned().unwrap_or("1".to_string());
-
-    if !PROBLEMS.contains_key(problem_id.as_str()) {
-        return HttpResponse::BadRequest().json("Invalid problem ID");
-    }
-
-    let problem = PROBLEMS.get(problem_id.as_str()).unwrap();
-    let code_path = tmp_dir.path().join("solution.cpp");
-    let exe_path = tmp_dir.path().join("solution_exe");
-
-    {
-        let mut f = File::create(&code_path).unwrap();
-        f.write_all(code.as_bytes()).unwrap();
-    }
-
-    let start_compile = Instant::now();
-    let compile_output = Command::new("g++")
-        .arg("-std=c++17")
-        .arg("-O2")
-        .arg(&code_path)
-        .arg("-o")
-        .arg(&exe_path)
-        .output()
-        .expect("Failed to compile");
-    let compile_time = start_compile.elapsed().as_secs_f64();
-
-    if !compile_output.status.success() {
-        let compile_log = String::from_utf8_lossy(&compile_output.stderr).to_string();
-        return HttpResponse::Ok().json(SubmissionResponse {
-            status: "Compilation Error".into(),
-            score: 0,
-            test_results: vec![],
-            compile_log,
-            compile_time_sec: compile_time,
-        });
-    }
-
-    let mut test_results = Vec::new();
-    let mut passed_count = 0;
-
-    for (i, (input, expected)) in problem.test_cases.iter().enumerate() {
-        let start_time = Instant::now();
-        let mut child = Command::new(&exe_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("Failed to run executable");
-
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(input.as_bytes()).unwrap();
+    match tmpl.render("home.html", &ctx) {
+        Ok(html) => HttpResponse::Ok().content_type("text/html").body(html),
+        Err(e) => {
+            eprintln!("Template render error: {e}");
+            HttpResponse::InternalServerError().body("Template render error")
         }
-
-        let pid = Pid::from(child.id() as usize);
-        let timeout = Duration::from_secs_f64(problem.time_limit);
-
-        let timed_out = match child.wait_timeout(timeout).unwrap() {
-            Some(status) => !status.success(),
-            None => {
-                let _ = child.kill();
-                true
-            }
-        };
-
-        let elapsed = start_time.elapsed().as_secs_f64();
-        let output = child.wait_with_output().unwrap();
-        let stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
-
-        let mut sys = System::new_all();
-        sys.refresh_process(pid);
-        let memory_used_kb = sys.process(pid).map(|p| p.memory()).unwrap_or(0);
-
-        let passed = stdout_str.trim() == expected.trim() && !timed_out;
-        if passed {
-            passed_count += 1;
-        }
-
-        test_results.push(TestResult {
-            test_num: i + 1,
-            status: if timed_out {
-                "Time Limit Exceeded".into()
-            } else if !passed {
-                "Wrong Answer".into()
-            } else {
-                "Passed".into()
-            },
-            passed,
-            time_sec: elapsed,
-            memory_kb: memory_used_kb,
-            stdout_snippet: stdout_str.chars().take(200).collect(),
-            stderr_snippet: stderr_str.chars().take(200).collect(),
-        });
     }
-
-    let total_tests = test_results.len();
-    let score = if total_tests > 0 {
-        (100 * passed_count / total_tests) as u32
-    } else {
-        0
-    };
-    let verdict = if passed_count == total_tests && total_tests > 0 {
-        "✅ Accepted".into()
-    } else {
-        format!("❌ Rejected - {}/{} tests passed", passed_count, total_tests)
-    };
-
-    let mut sem = SUBMISSION_SEMAPHORE.lock().unwrap();
-    *sem += 1;
-
-    HttpResponse::Ok().json(SubmissionResponse {
-        status: verdict,
-        score,
-        test_results,
-        compile_log: String::from_utf8_lossy(&compile_output.stderr).to_string(),
-        compile_time_sec: compile_time,
-    })
 }
 
-async fn render_home(tmpl: web::Data<Tera>) -> impl Responder {
-    let ctx = Context::new();
-    let rendered = tmpl.render("home.html", &ctx).unwrap();
-    HttpResponse::Ok().body(rendered)
-}
+async fn problem_page(
+    tmpl: web::Data<Tera>,
+    path: web::Path<String>,
+) -> impl Responder {
+    let pid = path.into_inner();
+    let mut ctx = Context::new();
 
-async fn render_problem(tmpl: web::Data<Tera>, path: web::Path<String>) -> impl Responder {
-    let problem_id = path.into_inner();
-    if !PROBLEMS.contains_key(problem_id.as_str()) {
+    if let Some(prob) = PROBLEMS.get(pid.as_str()) {
+        ctx.insert("problem", prob);
+        ctx.insert("problem_id", &pid);
+    } else {
         return HttpResponse::NotFound().body("Problem not found");
     }
 
-    let mut ctx = Context::new();
-    ctx.insert("problem_id", &problem_id);
-    ctx.insert("title", &PROBLEMS[problem_id.as_str()].title);
-    ctx.insert("description", &PROBLEMS[problem_id.as_str()].description);
+    match tmpl.render("problem.html", &ctx) {
+        Ok(html) => HttpResponse::Ok().content_type("text/html").body(html),
+        Err(e) => {
+            eprintln!("Template render error: {e}");
+            HttpResponse::InternalServerError().body("Template render error")
+        }
+    }
+}
 
-    let rendered = tmpl.render("problem.html", &ctx).unwrap();
-    HttpResponse::Ok().body(rendered)
+#[derive(Serialize)]
+struct TestResult {
+    test_num: usize,
+    status: String,
+    passed: bool,
+    time_sec: Option<f64>,
+    memory_kb: u64,
+}
+
+#[derive(Serialize)]
+struct SubmissionResponse {
+    status: String,
+    score: u32,
+    test_results: Vec<TestResult>,
+}
+
+async fn submit(mut payload: Multipart) -> impl Responder {
+    let mut code = String::new();
+    let mut problem_id = String::new();
+
+    while let Some(item) = payload.next().await {
+        let mut field = item.unwrap();
+        let name = field.name().to_string();
+        let mut data = Vec::new();
+
+        while let Some(chunk) = field.next().await {
+            data.extend_from_slice(&chunk.unwrap());
+        }
+
+        if name == "code" {
+            code = String::from_utf8_lossy(&data).to_string();
+        } else if name == "problem_id" {
+            problem_id = String::from_utf8_lossy(&data).to_string();
+        }
+    }
+
+    let prob = match PROBLEMS.get(problem_id.as_str()) {
+        Some(p) => p,
+        None => {
+            return HttpResponse::BadRequest().json(SubmissionResponse {
+                status: "❌ Problem not found".to_string(),
+                score: 0,
+                test_results: vec![],
+            });
+        }
+    };
+
+    let tmp_file = format!("/tmp/submission_{}.cpp", problem_id);
+    {
+        let mut f = File::create(&tmp_file).unwrap();
+        f.write_all(code.as_bytes()).unwrap();
+    }
+
+    // Compile
+    let exe_file = format!("/tmp/submission_{}.out", problem_id);
+    let compile_status = Command::new("g++")
+        .arg(&tmp_file)
+        .arg("-O2")
+        .arg("-std=c++17")
+        .arg("-o")
+        .arg(&exe_file)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    if compile_status.is_err() || !compile_status.unwrap().success() {
+        return HttpResponse::Ok().json(SubmissionResponse {
+            status: "❌ Compilation failed".to_string(),
+            score: 0,
+            test_results: vec![],
+        });
+    }
+
+    // Run tests
+    let mut total_score = 0;
+    let mut results = vec![];
+
+    for (i, (input, expected)) in prob.test_cases.iter().enumerate() {
+        let output = Command::new(&exe_file)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    use std::io::Write;
+                    stdin.write_all(input.as_bytes()).unwrap();
+                }
+                let output = child.wait_with_output().unwrap();
+                Ok(output)
+            });
+
+        let mut result = TestResult {
+            test_num: i + 1,
+            status: "Error".to_string(),
+            passed: false,
+            time_sec: None,
+            memory_kb: 0,
+        };
+
+        if let Ok(out) = output {
+            let res = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if res == expected.trim() {
+                result.status = "Accepted".to_string();
+                result.passed = true;
+                total_score += 100 / prob.test_cases.len() as u32;
+            } else {
+                result.status = format!("Wrong Answer (got '{}')", res);
+            }
+        }
+
+        results.push(result);
+    }
+
+    let response = SubmissionResponse {
+        status: "✅ Finished".to_string(),
+        score: total_score,
+        test_results: results,
+    };
+
+    HttpResponse::Ok().json(response)
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let tera = Tera::new("templates/**/*").unwrap();
+    let tera = Tera::new("templates/**/*").expect("Tera load failed");
 
-    let port: u16 = std::env::var("PORT")
-        .unwrap_or_else(|_| "5000".to_string())
-        .parse()
-        .unwrap();
+    println!("🚀 Server running on http://0.0.0.0:8080");
 
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(tera.clone()))
-            .route("/", web::get().to(render_home))
-            .route("/problem/{id}", web::get().to(render_problem))
-            .route("/submit", web::post().to(submit))
             .service(fs::Files::new("/static", "./static").show_files_listing())
+            .route("/", web::get().to(home))
+            .route("/problem/{id}", web::get().to(problem_page))
+            .route("/submit", web::post().to(submit))
     })
-    .bind(("0.0.0.0", port))?
+    .bind(("0.0.0.0", 8080))?
     .run()
     .await
 }
