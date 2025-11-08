@@ -10,13 +10,10 @@ use once_cell::sync::Lazy;
 use std::time::Instant;
 use std::io::Write;
 use lazy_static::lazy_static;
+use actix_multipart::Multipart;
+use futures_util::StreamExt as _;
 
-static MAX_CONCURRENT_SUBMISSIONS: usize = 2;
-static TEMPLATES: Lazy<Tera> = Lazy::new(|| {
-    Tera::new("templates/**/*").expect("Failed to parse templates")
-});
-static SUBMISSION_SEMAPHORE: Lazy<Arc<Mutex<usize>>> =
-    Lazy::new(|| Arc::new(Mutex::new(MAX_CONCURRENT_SUBMISSIONS)));
+static TEMPLATES: Lazy<Tera> = Lazy::new(|| Tera::new("templates/**/*").unwrap());
 
 #[derive(Clone, Serialize)]
 struct Problem {
@@ -83,13 +80,11 @@ async fn problem_page(pid: web::Path<String>) -> impl Responder {
     }
 }
 
-async fn submit(form: actix_multipart::Multipart) -> impl Responder {
-    use futures_util::StreamExt as _;
+async fn submit(mut form: Multipart) -> impl Responder {
     let mut code = String::new();
     let mut problem_id = String::new();
 
-    let mut fields = form;
-    while let Some(item) = fields.next().await {
+    while let Some(item) = form.next().await {
         let mut field = item.unwrap();
         let name = field.name().to_string();
         let mut data = Vec::new();
@@ -103,15 +98,21 @@ async fn submit(form: actix_multipart::Multipart) -> impl Responder {
         }
     }
 
+    if code.trim().is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({ "status": "No code provided" }));
+    }
+
     let problem = match PROBLEMS.get(problem_id.as_str()) {
         Some(p) => p,
         None => return HttpResponse::BadRequest().json(serde_json::json!({ "status": "Invalid problem" })),
     };
 
-    let exe_path = NamedTempFile::new().unwrap().into_temp_path();
     let mut src_file = NamedTempFile::new().unwrap();
     write!(src_file, "{}", code).unwrap();
+    src_file.flush().unwrap();
     let src_path = src_file.into_temp_path();
+
+    let exe_path = NamedTempFile::new().unwrap().into_temp_path();
 
     let start_compile = Instant::now();
     let compile_output = Command::new("g++")
@@ -146,21 +147,19 @@ async fn submit(form: actix_multipart::Multipart) -> impl Responder {
             .spawn()
             .unwrap();
 
-        let pid = child.id();
-
         {
             let stdin = child.stdin.as_mut().unwrap();
             stdin.write_all(input.as_bytes()).unwrap();
         }
 
-        let mut sys = System::new_all();
-        sys.refresh_process(Pid::from(pid as usize));
-        let memory = sys.process(Pid::from(pid as usize))
-            .map(|p| p.memory())
-            .unwrap_or(0);
-
         let output = child.wait_with_output().unwrap();
         let duration = start.elapsed().as_secs_f64();
+
+        let mut sys = System::new_all();
+        sys.refresh_process(Pid::from(child.id() as usize));
+        let memory = sys.process(Pid::from(child.id() as usize))
+            .map(|p| p.memory())
+            .unwrap_or(0);
 
         let passed = String::from_utf8_lossy(&output.stdout).trim() == *expected;
         let status = if passed { "Accepted" } else { "Wrong Answer" }.to_string();
@@ -200,5 +199,3 @@ async fn main() -> std::io::Result<()> {
     .run()
     .await
 }
-
-
