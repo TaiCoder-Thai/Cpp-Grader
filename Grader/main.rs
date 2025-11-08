@@ -13,8 +13,7 @@ use lazy_static::lazy_static;
 
 static MAX_CONCURRENT_SUBMISSIONS: usize = 2;
 static TEMPLATES: Lazy<Tera> = Lazy::new(|| {
-    let tera = Tera::new("templates/**/*").expect("Failed to parse templates");
-    tera
+    Tera::new("templates/**/*").expect("Failed to parse templates")
 });
 static SUBMISSION_SEMAPHORE: Lazy<Arc<Mutex<usize>>> =
     Lazy::new(|| Arc::new(Mutex::new(MAX_CONCURRENT_SUBMISSIONS)));
@@ -24,7 +23,7 @@ struct Problem {
     title: &'static str,
     description: &'static str,
     time_limit: f64,
-    memory_limit_kb: u64,
+    memory_limit: u64,
     test_cases: Vec<(&'static str, &'static str)>,
 }
 
@@ -35,7 +34,7 @@ lazy_static! {
             title: "1. A + B",
             description: "Sum two numbers",
             time_limit: 1.0,
-            memory_limit_kb: 10 * 1024,
+            memory_limit: 10 * 1024,
             test_cases: vec![
                 ("3 5\n", "8"),
                 ("10 20\n", "30"),
@@ -148,19 +147,20 @@ async fn submit(form: actix_multipart::Multipart) -> impl Responder {
             .unwrap();
 
         let pid = child.id();
+
         {
             let stdin = child.stdin.as_mut().unwrap();
             stdin.write_all(input.as_bytes()).unwrap();
         }
-
-        let output = child.wait_with_output().unwrap();
-        let duration = start.elapsed().as_secs_f64();
 
         let mut sys = System::new_all();
         sys.refresh_process(Pid::from(pid as usize));
         let memory = sys.process(Pid::from(pid as usize))
             .map(|p| p.memory())
             .unwrap_or(0);
+
+        let output = child.wait_with_output().unwrap();
+        let duration = start.elapsed().as_secs_f64();
 
         let passed = String::from_utf8_lossy(&output.stdout).trim() == *expected;
         let status = if passed { "Accepted" } else { "Wrong Answer" }.to_string();
