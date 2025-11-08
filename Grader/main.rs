@@ -23,7 +23,7 @@ struct Problem {
     title: &'static str,
     description: &'static str,
     time_limit: f64,
-    memory_limit: u64,
+    memory_limit_kb: u64,
     test_cases: Vec<(&'static str, &'static str)>,
 }
 
@@ -200,3 +200,4 @@ async fn main() -> std::io::Result<()> {
     .run()
     .await
 }
+
