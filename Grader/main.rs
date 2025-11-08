@@ -34,7 +34,7 @@ lazy_static! {
             title: "1. A + B",
             description: "Sum two numbers",
             time_limit: 1.0,
-            memory_limit: 10 * 1024,
+            memory_limit_kb: 10 * 1024,
             test_cases: vec![
                 ("3 5\n", "8"),
                 ("10 20\n", "30"),
@@ -200,4 +200,5 @@ async fn main() -> std::io::Result<()> {
     .run()
     .await
 }
+
 
