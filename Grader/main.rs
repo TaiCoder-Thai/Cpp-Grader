@@ -8,12 +8,8 @@ use tera::{Tera, Context};
 use once_cell::sync::Lazy;
 use std::time::Instant;
 use std::io::Write;
-use lazy_static::lazy_static;
 
-static TEMPLATES: Lazy<Tera> = Lazy::new(|| {
-    let tera = Tera::new("templates/**/*").expect("Failed to parse templates");
-    tera
-});
+static TEMPLATES: Lazy<Tera> = Lazy::new(|| Tera::new("templates/**/*").expect("Failed to parse templates"));
 
 #[derive(Clone, Serialize)]
 struct Problem {
@@ -24,23 +20,21 @@ struct Problem {
     test_cases: Vec<(&'static str, &'static str)>,
 }
 
-lazy_static! {
-    static ref PROBLEMS: std::collections::HashMap<&'static str, Problem> = {
-        let mut m = std::collections::HashMap::new();
-        m.insert("1", Problem {
-            title: "1. A + B",
-            description: "Sum two numbers",
-            time_limit: 1.0,
-            memory_limit_kb: 10 * 1024,
-            test_cases: vec![
-                ("3 5\n", "8"),
-                ("10 20\n", "30"),
-                ("28282929 2828282\n", "31111211"),
-            ],
-        });
-        m
-    };
-}
+static PROBLEMS: Lazy<std::collections::HashMap<&'static str, Problem>> = Lazy::new(|| {
+    let mut m = std::collections::HashMap::new();
+    m.insert("1", Problem {
+        title: "1. A + B",
+        description: "Sum two numbers",
+        time_limit: 1.0,
+        memory_limit_kb: 10 * 1024,
+        test_cases: vec![
+            ("3 5\n", "8"),
+            ("10 20\n", "30"),
+            ("28282929 2828282\n", "31111211"),
+        ],
+    });
+    m
+});
 
 #[derive(Serialize)]
 struct TestResult {
@@ -80,13 +74,13 @@ async fn problem_page(pid: web::Path<String>) -> impl Responder {
     }
 }
 
-async fn submit(form: actix_multipart::Multipart) -> impl Responder {
+async fn submit(mut form: actix_multipart::Multipart) -> impl Responder {
     use futures_util::StreamExt as _;
+
     let mut code = String::new();
     let mut problem_id = String::new();
 
-    let mut fields = form;
-    while let Some(item) = fields.next().await {
+    while let Some(item) = form.next().await {
         let mut field = item.unwrap();
         let name = field.name().to_string();
         let mut data = Vec::new();
@@ -105,18 +99,20 @@ async fn submit(form: actix_multipart::Multipart) -> impl Responder {
         None => return HttpResponse::BadRequest().json(serde_json::json!({ "status": "Invalid problem" })),
     };
 
-    let exe_path = NamedTempFile::new().unwrap().into_temp_path();
     let mut src_file = NamedTempFile::new().unwrap();
     write!(src_file, "{}", code).unwrap();
-    let src_path = src_file.into_temp_path();
+    let src_path = src_file.path().to_path_buf();
+
+    let exe_file = NamedTempFile::new().unwrap();
+    let exe_path = exe_file.path().to_path_buf();
 
     let start_compile = Instant::now();
     let compile_output = Command::new("g++")
         .arg("-std=c++17")
-        .arg(src_path.to_str().unwrap())
+        .arg(&src_path)
         .arg("-O2")
         .arg("-o")
-        .arg(exe_path.to_str().unwrap())
+        .arg(&exe_path)
         .stderr(Stdio::piped())
         .output()
         .unwrap();
@@ -137,18 +133,18 @@ async fn submit(form: actix_multipart::Multipart) -> impl Responder {
 
     for (i, (input, expected)) in problem.test_cases.iter().enumerate() {
         let start = Instant::now();
-        let mut child = Command::new(exe_path.to_str().unwrap())
+        let mut child = Command::new(&exe_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
 
-        let pid = child.id();
         {
             let stdin = child.stdin.as_mut().unwrap();
             stdin.write_all(input.as_bytes()).unwrap();
         }
 
+        let pid = child.id();
         let output = child.wait_with_output().unwrap();
         let duration = start.elapsed().as_secs_f64();
 
