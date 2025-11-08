@@ -54,7 +54,7 @@
         </div>
         <div class="control-group">
           <label>💾 Memory:</label>
-          <span>{{ problem.memory_limit }} MB</span>
+          <span>{{ problem.memory_limit_kb / 1024 }} MB</span>
         </div>
 
         <button id="runBtn">▶️ Run Code</button>
@@ -158,3 +158,4 @@
   </script>
 </body>
 </html>
+
