@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>C++ Grader</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="container">
+    <h1>C++ Grader</h1>
+    <div class="cards">
+      {% for pid, prob in problems.items() %}
+      <div class="card">
+        <h3>{{ prob.title }}</h3>
+        <p>{{ prob.description }}</p>
+        <p><strong>Time Limit:</strong> {{ prob.time_limit }} seconds</p>
+        <p><strong>Memory Limit:</strong> {{ prob.memory_limit }} MB</p>
+
+        {% if prob.score is defined %}
+          {% if prob.score == 0 %}
+            <div class="score-box zero">{{ prob.score }}/100</div>
+          {% elif prob.score == 100 %}
+            <div class="score-box">{{ prob.score }}/100</div>
+          {% else %}
+            <div class="score-box partial">{{ prob.score }}/100</div>
+          {% endif %}
+        {% endif %}
+
+        <a href="/problem/{{ pid }}">Open Problem</a>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</body>
+</html>
