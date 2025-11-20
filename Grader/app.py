@@ -135,7 +135,7 @@ def load_testcases(problem):
 # -----------------------------
 @app.route("/submit", methods=["POST"])
 def submit():
-    if psutil.virtual_memory().available < 350 * 1024 * 1024:
+    if psutil.virtual_memory().available < 200 * 1024 * 1024:
         return jsonify({"status": "Server busy, try later"}), 429
 
     if not submission_semaphore.acquire(blocking=False):
@@ -146,7 +146,6 @@ def submit():
         code = request.form.get("code")
         uploaded_file = request.files.get("codefile")
         problem_id = request.form.get("problem_id", "1")
-        language = request.form.get("language", "cpp").lower()  # still accept param
 
         if uploaded_file and uploaded_file.filename:
             code = uploaded_file.read().decode("utf-8")
@@ -159,7 +158,6 @@ def submit():
         problem = problems[problem_id]
         time_limit = problem.get("time_limit", 1.0)
         memory_limit_kb = problem.get("memory_limit", 256) * 1024
-        test_cases = load_testcases(problem)
 
         # --- Create temp folder ---
         tmp_dir = tempfile.mkdtemp(prefix="submission_")
@@ -171,25 +169,27 @@ def submit():
         with open(code_path, "w", encoding="utf-8") as f:
             f.write(code)
 
-        # --- Compile (C++ only) ---
+        # --- Compile C++ only ---
         start_compile = time.time()
         compile_cmd = ["g++", "-std=c++17", "-O2", code_path, "-o", exe_path]
         compile_result = subprocess.run(compile_cmd, capture_output=True, text=True)
         compile_time_sec = round(time.time() - start_compile, 3)
-        compile_log = compile_result.stderr
+        compile_log = compile_result.stderr[:5000]  # limit log size
+
         if compile_result.returncode != 0:
+            # Compilation failed, don't load test cases
             return jsonify({
                 "status": "Compilation Error",
                 "compile_log": compile_log,
                 "compile_time_sec": compile_time_sec
             })
 
-        run_cmd = exe_path  # always C++
-
-        # --- Run test cases ---
+        # --- Load test cases only after successful compilation ---
+        test_cases = load_testcases(problem)
         test_results = []
+
         for idx, case in enumerate(test_cases):
-            future = executor.submit(run_with_limits, run_cmd, case["input"], time_limit, memory_limit_kb)
+            future = executor.submit(run_with_limits, exe_path, case["input"], time_limit, memory_limit_kb)
             run_result, memory_used_kb, elapsed_time, killed_mem, timed_out = future.result()
 
             if timed_out:
@@ -229,9 +229,13 @@ def submit():
         })
 
     finally:
-        if tmp_dir and os.path.exists(tmp_dir):
-            shutil.rmtree(tmp_dir)
+        try:
+            if tmp_dir and os.path.exists(tmp_dir):
+                shutil.rmtree(tmp_dir)
+        except Exception:
+            pass
         submission_semaphore.release()
+
 
 # -----------------------------
 # Routes
