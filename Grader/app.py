@@ -146,7 +146,7 @@ def submit():
         code = request.form.get("code")
         uploaded_file = request.files.get("codefile")
         problem_id = request.form.get("problem_id", "1")
-        language = request.form.get("language", "cpp").lower()
+        language = request.form.get("language", "cpp").lower()  # still accept param
 
         if uploaded_file and uploaded_file.filename:
             code = uploaded_file.read().decode("utf-8")
@@ -156,20 +156,15 @@ def submit():
         if problem_id not in problems:
             return jsonify({"status": "Error", "error": "Invalid problem ID"})
 
-        if language not in ("cpp", "python"):
-            return jsonify({"status": "Error", "error": "Unsupported language"})
-
         problem = problems[problem_id]
         time_limit = problem.get("time_limit", 1.0)
-        memory_limit = problem.get("memory_limit", 256)
-        memory_limit_kb = memory_limit * 1024
+        memory_limit_kb = problem.get("memory_limit", 256) * 1024
         test_cases = load_testcases(problem)
 
         # --- Create temp folder ---
         tmp_dir = tempfile.mkdtemp(prefix="submission_")
         uid = uuid.uuid4().hex
-        ext = "cpp" if language == "cpp" else "py"
-        code_path = os.path.join(tmp_dir, f"solution_{uid}.{ext}")
+        code_path = os.path.join(tmp_dir, f"solution_{uid}.cpp")
         exe_name = f"solution_{uid}.exe" if os.name == "nt" else f"solution_{uid}"
         exe_path = os.path.join(tmp_dir, exe_name)
 
@@ -177,24 +172,22 @@ def submit():
             f.write(code)
 
         # --- Compile (C++ only) ---
-        compile_time_sec = 0
-        compile_log = ""
-        if language == "cpp":
-            start_compile = time.time()
-            compile_cmd = ["g++", "-std=c++17", "-O2", code_path, "-o", exe_path]
-            compile_result = subprocess.run(compile_cmd, capture_output=True, text=True)
-            compile_time_sec = round(time.time() - start_compile, 3)
-            compile_log = compile_result.stderr
-            if compile_result.returncode != 0:
-                return jsonify({"status": "Compilation Error",
-                                "compile_log": compile_log,
-                                "compile_time_sec": compile_time_sec})
+        start_compile = time.time()
+        compile_cmd = ["g++", "-std=c++17", "-O2", code_path, "-o", exe_path]
+        compile_result = subprocess.run(compile_cmd, capture_output=True, text=True)
+        compile_time_sec = round(time.time() - start_compile, 3)
+        compile_log = compile_result.stderr
+        if compile_result.returncode != 0:
+            return jsonify({
+                "status": "Compilation Error",
+                "compile_log": compile_log,
+                "compile_time_sec": compile_time_sec
+            })
 
-        run_cmd = exe_path if language == "cpp" else ["python3", code_path]
+        run_cmd = exe_path  # always C++
 
-        # --- Run test cases in executor ---
+        # --- Run test cases ---
         test_results = []
-
         for idx, case in enumerate(test_cases):
             future = executor.submit(run_with_limits, run_cmd, case["input"], time_limit, memory_limit_kb)
             run_result, memory_used_kb, elapsed_time, killed_mem, timed_out = future.result()
@@ -236,13 +229,9 @@ def submit():
         })
 
     finally:
-        try:
-            if tmp_dir and os.path.exists(tmp_dir):
-                shutil.rmtree(tmp_dir)
-        except Exception:
-            pass
+        if tmp_dir and os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir)
         submission_semaphore.release()
-
 
 # -----------------------------
 # Routes
