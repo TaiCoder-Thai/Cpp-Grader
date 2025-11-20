@@ -24,7 +24,6 @@ WORKER_POOL_SIZE = 3
 submission_semaphore = BoundedSemaphore(MAX_CONCURRENT_SUBMISSIONS)
 executor = ThreadPoolExecutor(max_workers=WORKER_POOL_SIZE)
 
-
 # -----------------------------
 # LOAD PROBLEMS META ON START
 # -----------------------------
@@ -40,19 +39,17 @@ def load_all_problems():
             problems[meta["id"]] = meta
     return problems
 
-
 problems = load_all_problems()
-
 
 # -----------------------------
 # HELPER: Run code with limits
 # -----------------------------
-def run_with_limits(executable_path, input_data, time_limit, memory_limit_kb):
+def run_with_limits(executable_path, input_file, time_limit, memory_limit_kb):
     peak_kb = 0
     killed_for_mem = False
     timeout_flag = False
 
-    popen_kwargs = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    popen_kwargs = dict(stdin=open(input_file, "r"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if os.name == "posix":
         popen_kwargs["preexec_fn"] = os.setsid
     else:
@@ -91,7 +88,7 @@ def run_with_limits(executable_path, input_data, time_limit, memory_limit_kb):
     mon_thread.start()
 
     try:
-        stdout, stderr = proc.communicate(input=input_data, timeout=time_limit)
+        stdout, stderr = proc.communicate(timeout=time_limit)
         elapsed = round(proc.cpu_times().user + proc.cpu_times().system, 3)
         return subprocess.CompletedProcess([executable_path], proc.returncode, stdout, stderr), peak_kb, elapsed, killed_for_mem, False
     except subprocess.TimeoutExpired:
@@ -112,9 +109,8 @@ def run_with_limits(executable_path, input_data, time_limit, memory_limit_kb):
         fake = subprocess.CompletedProcess([executable_path], 1, stdout="", stderr=str(e))
         return fake, peak_kb, 0, killed_for_mem, False
 
-
 # -----------------------------
-# HELPER: Load test cases from folder
+# HELPER: Load testcases (file paths only)
 # -----------------------------
 def load_testcases(problem):
     folder = problem["folder"]
@@ -122,13 +118,8 @@ def load_testcases(problem):
     for i in range(1, problem["test_count"] + 1):
         input_file = os.path.join(folder, f"input{i}.txt")
         output_file = os.path.join(folder, f"output{i}.txt")
-        with open(input_file, "r", encoding="utf-8") as f_in:
-            input_data = f_in.read()
-        with open(output_file, "r", encoding="utf-8") as f_out:
-            output_data = f_out.read()
-        test_cases.append({"input": input_data, "expected": output_data})
+        test_cases.append({"input_file": input_file, "expected_file": output_file})
     return test_cases
-
 
 # -----------------------------
 # SUBMIT ROUTE
@@ -146,6 +137,7 @@ def submit():
         code = request.form.get("code")
         uploaded_file = request.files.get("codefile")
         problem_id = request.form.get("problem_id", "1")
+        language = request.form.get("language", "cpp").lower()  # kept but ignored
 
         if uploaded_file and uploaded_file.filename:
             code = uploaded_file.read().decode("utf-8")
@@ -157,7 +149,9 @@ def submit():
 
         problem = problems[problem_id]
         time_limit = problem.get("time_limit", 1.0)
-        memory_limit_kb = problem.get("memory_limit", 256) * 1024
+        memory_limit = problem.get("memory_limit", 256)
+        memory_limit_kb = memory_limit * 1024
+        test_cases = load_testcases(problem)
 
         # --- Create temp folder ---
         tmp_dir = tempfile.mkdtemp(prefix="submission_")
@@ -169,28 +163,23 @@ def submit():
         with open(code_path, "w", encoding="utf-8") as f:
             f.write(code)
 
-        # --- Compile C++ only ---
+        # --- Compile C++ ---
         start_compile = time.time()
         compile_cmd = ["g++", "-std=c++17", "-O2", code_path, "-o", exe_path]
         compile_result = subprocess.run(compile_cmd, capture_output=True, text=True)
         compile_time_sec = round(time.time() - start_compile, 3)
-        compile_log = compile_result.stderr[:5000]  # limit log size
-
+        compile_log = compile_result.stderr
         if compile_result.returncode != 0:
-            # Compilation failed, don't load test cases
-            return jsonify({
-                "status": "Compilation Error",
-                "compile_log": compile_log,
-                "compile_time_sec": compile_time_sec
-            })
+            return jsonify({"status": "Compilation Error",
+                            "compile_log": compile_log,
+                            "compile_time_sec": compile_time_sec})
 
-        # --- Load test cases only after successful compilation ---
-        test_cases = load_testcases(problem)
+        # --- Run test cases ---
         test_results = []
-
         for idx, case in enumerate(test_cases):
-            future = executor.submit(run_with_limits, exe_path, case["input"], time_limit, memory_limit_kb)
-            run_result, memory_used_kb, elapsed_time, killed_mem, timed_out = future.result()
+            run_result, memory_used_kb, elapsed_time, killed_mem, timed_out = run_with_limits(
+                exe_path, case["input_file"], time_limit, memory_limit_kb
+            )
 
             if timed_out:
                 status = "Time Limit Exceeded"
@@ -202,9 +191,11 @@ def submit():
                 status = "Runtime Error"
                 passed = False
             else:
-                output = run_result.stdout.strip()
-                expected = case["expected"].strip()
-                passed = (output == expected)
+                # Compare output line-by-line from files
+                with open(case["expected_file"], "r", encoding="utf-8") as f:
+                    expected_lines = [line.rstrip() for line in f]
+                output_lines = run_result.stdout.splitlines()
+                passed = (output_lines == expected_lines)
                 status = "Passed" if passed else "Wrong Answer"
 
             test_results.append({
@@ -243,7 +234,6 @@ def submit():
 @app.route("/")
 def home():
     return render_template("home.html", problems=problems)
-
 
 @app.route("/problem/<pid>")
 def problem(pid):
